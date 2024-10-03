@@ -130,15 +130,7 @@ def main():
     orders_processing_stream = orders_stream_processor.update_orders_stream(df_orders_items_stream)
     # Process the inventory events append stream
     events_processing_stream = events_stream_processor.append_events_stream(spark)
-    
-    
 
-    
-    
-    
-    
-    
-    
     
 if __name__ == "__main__":
     setup_logging()

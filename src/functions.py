@@ -188,43 +188,38 @@ class OrdersItemsProcessor:
         Raises:
         - ValueError: If the input DataFrame is empty or has unexpected schema.
         """
-        try:
-            # Validate input streaming DataFrame
-            if df_order_stream is None or len(df_order_stream.columns) == 0:
-                raise ValueError("Input DataFrame is empty or not provided")
+        # Validate input streaming DataFrame
+        if df_order_stream is None or len(df_order_stream.columns) == 0:
+            raise ValueError("Input DataFrame is empty or not provided")
 
-            # Apply the transformation logic for the streaming DataFrame
-            df_orders_items_stream = (
-                df_order_stream
-                .withColumn("order_exploded", f.explode(f.col("order_details.items")))
-                .withColumn("package_exploded", f.explode(f.col("order_exploded.packages")))
-                .withColumn("inventory_id", f.concat(f.lit("inv-"), f.expr("uuid()")))
-                .withColumn("items_quantity", f.col("order_exploded.quantity") * f.col("package_exploded.quantity"))
-                .withColumn("items_weight", f.col("items_quantity") * f.col("package_exploded.weight"))
-                .withColumn("items_volume", f.col("items_quantity") * f.col("package_exploded.volume"))
-                .withColumn("status", f.lit("PENDING"))
-                .select(
-                    f.col("inventory_id"),
-                    f.col("order_id"),
-                    f.col("order_exploded.product_id").alias("product_id"),
-                    f.col("order_exploded.product_name").alias("product_name"),
-                    f.col("order_exploded.price").alias("order_price"),
-                    f.col("package_exploded.package_id").alias("package_id"),
-                    f.col("package_exploded.subpackage_id").alias("subpackage_id"),
-                    f.col("items_quantity"),
-                    f.col("items_weight"),
-                    f.col("items_volume"),
-                    f.col("order_details.order_timestamp").alias("order_timestamp"),
-                    f.col("status")
-                )
+        # Apply the transformation logic for the streaming DataFrame
+        df_orders_items_stream = (
+            df_order_stream
+            .withColumn("order_exploded", f.explode(f.col("order_details.items")))
+            .withColumn("package_exploded", f.explode(f.col("order_exploded.packages")))
+            .withColumn("inventory_id", f.concat(f.lit("inv-"), f.expr("uuid()")))
+            .withColumn("items_quantity", f.col("order_exploded.quantity") * f.col("package_exploded.quantity"))
+            .withColumn("items_weight", f.col("items_quantity") * f.col("package_exploded.weight"))
+            .withColumn("items_volume", f.col("items_quantity") * f.col("package_exploded.volume"))
+            .withColumn("status", f.lit("PENDING"))
+            .select(
+                f.col("inventory_id"),
+                f.col("order_id"),
+                f.col("order_exploded.product_id").alias("product_id"),
+                f.col("order_exploded.product_name").alias("product_name"),
+                f.col("order_exploded.price").alias("order_price"),
+                f.col("package_exploded.package_id").alias("package_id"),
+                f.col("package_exploded.subpackage_id").alias("subpackage_id"),
+                f.col("items_quantity"),
+                f.col("items_weight"),
+                f.col("items_volume"),
+                f.col("order_details.order_timestamp").alias("order_timestamp"),
+                f.col("status")
             )
-            # Log success message
-            logging.info("Transformation applied successfully to the streaming DataFrame.")
-            return df_orders_items_stream
-
-        except Exception as e:
-            logging.error(f"Error occurred during transformation: {str(e)}")
-            raise  # Re-raise exception for further handling
+        )
+        # Log success message
+        logging.info("Orders Stream Transformation applied successfully to the streaming DataFrame.")
+        return df_orders_items_stream
 
     def upsert_to_orders_items(self, microBatchDF, batchId):
         """
@@ -271,6 +266,8 @@ class OrdersItemsProcessor:
             .option("checkpointLocation", f"{self.orders_items_checkpoint_location}_processing")
             .start()
         )
+        # Log the status of the streaming process
+        logging.info(f"Processing Orders Items stream successfully written to {self.orders_items_path}")
         
         return processing_orders_items_stream
 
@@ -300,36 +297,28 @@ class EventsStreamProcessor:
         Raises:
         - Exception: If the streaming process fails or encounters an error.
         """
-        try:
-            # Define the stream transformation and writing process
-            events_stream = (
-                df_order_stream
-                .select(
-                    f.col("event_id"),
-                    f.col("event_type"),
-                    f.col("event_timestamp"),
-                    f.col("order_id")
-                )
-                .writeStream
-                .format("delta")
-                .outputMode("append")
-                .trigger(once=True)  # Using trigger(once=True) as per requirement
-                .option("path", self.events_path)
-                .option("checkpointLocation", self.events_checkpoint_location)
-                .start()
+        # Define the stream transformation and writing process
+        events_stream = (
+            df_order_stream
+            .select(
+                f.col("event_id"),
+                f.col("event_type"),
+                f.col("event_timestamp"),
+                f.col("order_id")
             )
-            
-            # Log the status of the streaming process
-            logging.info(f"Streaming process status: {events_stream.status}")
-            
-            print(f"Events stream successfully written to {self.events_path}")
+            .writeStream
+            .format("delta")
+            .outputMode("append")
+            .trigger(once=True)  # Using trigger(once=True) as per requirement
+            .option("path", self.events_path)
+            .option("checkpointLocation", self.events_checkpoint_location)
+            .start()
+        )
+        
+        # Log the status of the streaming process
+        logging.info(f"Events stream successfully written to {self.events_path}")
 
-            return events_stream
-            
-        except Exception as e:
-            # Log the error and raise an exception
-            logging.error(f"Failed to process events stream: {str(e)}")
-            raise Exception(f"Failed to process events stream: {str(e)}")
+        return events_stream
 
     def append_events_stream(self, spark: SparkSession) -> None:
         """
@@ -340,45 +329,39 @@ class EventsStreamProcessor:
         Parameters:
         - spark: SparkSession object
         """
-        try:
-            # Define the streaming read and transformations
-            processing_events_stream = (
-                spark
-                .readStream
-                .format("delta")  # Reading from Delta format
-                .load(self.orders_path)  # Load from the specified Delta table path
-                .filter(f.col("status") == f.lit("PROCESSING"))  # Filter for processing orders
-                .withColumn(
-                    "event_id", f.concat(f.lit("ev-"), f.expr("uuid()"))  # Generate unique event ID
-                )
-                .withColumn(
-                    "event_type", f.lit("INVENTORY_UPDATED")  # Set the event type
-                )
-                .withColumn(
-                    "event_timestamp", f.current_timestamp()  # Add the current timestamp
-                )
-                .select(
-                    f.col("event_id"),
-                    f.col("event_type"),
-                    f.col("event_timestamp"),
-                    f.col("order_id")  # Select relevant columns
-                )
-                .writeStream
-                .format("delta")  # Write the output in Delta format
-                .outputMode("append")  # Append new data as it arrives
-                .trigger(once=True)  # Trigger the stream to process once
-                .option("path", self.events_path)  # Specify the path to write the output
-                .option("checkpointLocation", f"{self.events_checkpoint_location}_processing")  # Set checkpoint location
-                .start()  # Start the streaming query
+        # Define the streaming read and transformations
+        processing_events_stream = (
+            spark
+            .readStream
+            .format("delta")  # Reading from Delta format
+            .load(self.orders_path)  # Load from the specified Delta table path
+            .filter(f.col("status") == f.lit("PROCESSING"))  # Filter for processing orders
+            .withColumn(
+                "event_id", f.concat(f.lit("ev-"), f.expr("uuid()"))  # Generate unique event ID
             )
-            
-            logging.info(f"Processing events stream started successfully.")
-            return processing_events_stream
+            .withColumn(
+                "event_type", f.lit("INVENTORY_UPDATED")  # Set the event type
+            )
+            .withColumn(
+                "event_timestamp", f.current_timestamp()  # Add the current timestamp
+            )
+            .select(
+                f.col("event_id"),
+                f.col("event_type"),
+                f.col("event_timestamp"),
+                f.col("order_id")  # Select relevant columns
+            )
+            .writeStream
+            .format("delta")  # Write the output in Delta format
+            .outputMode("append")  # Append new data as it arrives
+            .trigger(once=True)  # Trigger the stream to process once
+            .option("path", self.events_path)  # Specify the path to write the output
+            .option("checkpointLocation", f"{self.events_checkpoint_location}_processing")  # Set checkpoint location
+            .start()  # Start the streaming query
+        )
         
-        except Exception as e:
-            logging.error(f"Failed to append events stream: {str(e)}")
-            # raise Exception(f"Failed to append events stream: {str(e)}")
-
+        logging.info(f"Processing events stream successfully written to {self.events_path}")
+        return processing_events_stream
 
 class OrdersStreamProcessor:
     def __init__(self, spark, orders_path, checkpoint_location):
@@ -404,38 +387,32 @@ class OrdersStreamProcessor:
         Raises:
         - Exception: If the streaming process fails or encounters an error.
         """
-        try:
-            # Define the stream transformation and writing process
-            orders_stream = (
-                df_order_stream
-                .select(
-                    f.col("order_id"),
-                    f.col("order_details.customer_id").alias("customer_id"),
-                    f.col("order_details.total_weight").alias("total_weight"),
-                    f.col("order_details.total_volume").alias("total_volume"),
-                    f.col("order_details.total_amount").alias("total_price"),
-                    f.col("order_details.order_timestamp").alias("order_timestamp"),
-                    f.col("order_details.status").alias("status"),
-                    f.col("order_details.destination_address.lat").alias("lat"),
-                    f.col("order_details.destination_address.lon").alias("lon")
-                )
-                .writeStream
-                .format("delta")
-                .outputMode("append")
-                .trigger(once=True)  # Trigger once to process the stream and stop
-                .option("path", self.orders_path)
-                .option("checkpointLocation", self.checkpoint_location)
-                .start()
+        # Define the stream transformation and writing process
+        orders_stream = (
+            df_order_stream
+            .select(
+                f.col("order_id"),
+                f.col("order_details.customer_id").alias("customer_id"),
+                f.col("order_details.total_weight").alias("total_weight"),
+                f.col("order_details.total_volume").alias("total_volume"),
+                f.col("order_details.total_amount").alias("total_price"),
+                f.col("order_details.order_timestamp").alias("order_timestamp"),
+                f.col("order_details.status").alias("status"),
+                f.col("order_details.destination_address.lat").alias("lat"),
+                f.col("order_details.destination_address.lon").alias("lon")
             )
-            
-            logging.info(f"Streaming process status: {orders_stream.status}")
-            print(f"Orders stream successfully written to {self.orders_path}")
-
-            return orders_stream
+            .writeStream
+            .format("delta")
+            .outputMode("append")
+            .trigger(once=True)  # Trigger once to process the stream and stop
+            .option("path", self.orders_path)
+            .option("checkpointLocation", self.checkpoint_location)
+            .start()
+        )
         
-        except Exception as e:
-            logging.error(f"Failed to process orders stream: {str(e)}")
-            raise Exception(f"Failed to process orders stream: {str(e)}")
+        logging.info(f"Orders stream successfully written to {self.orders_path}")
+
+        return orders_stream
 
     def upsert_to_orders(self, microBatchDF, batchId):
         """
@@ -485,6 +462,8 @@ class OrdersStreamProcessor:
             .start()
         )
         
+        (f"Processing Orders stream successfully written to {self.orders_path}")
+        
         return processing_orders_stream
 
 
@@ -510,38 +489,33 @@ class PackagesStreamProcessor:
         - microBatchDF: The micro-batch DataFrame from the streaming source.
         - batchId: The unique identifier for the micro-batch.
         """
-        try:
-            # Define the Delta table path
-            deltaTableProducts = DeltaTable.forPath(
-                self.spark, self.packages_path
+        # Define the Delta table path
+        deltaTableProducts = DeltaTable.forPath(
+            self.spark, self.packages_path
+        )
+
+        # Deduplicate and aggregate the micro-batch DataFrame
+        deduplicatedBatchDF = (
+            microBatchDF
+            .filter(f.col("status") == f.lit("PENDING"))
+            .groupBy("package_id", "subpackage_id")
+            .agg(
+                f.sum("items_quantity").alias("items_quantity"),
             )
+        )
+        
+        # Perform the upsert operation (merge)
+        deltaTableProducts.alias("t").merge(
+            deduplicatedBatchDF.alias("s"),
+            "s.package_id = t.package_id AND s.subpackage_id = t.subpackage_id"
+        ).whenMatchedUpdate(
+            condition=f.col("t.stock_quantity") >= f.col("s.items_quantity"),
+            set={
+                "stock_quantity": f.col("t.stock_quantity") - f.col("s.items_quantity"),
+            }
+        ).execute()
 
-            # Deduplicate and aggregate the micro-batch DataFrame
-            deduplicatedBatchDF = (
-                microBatchDF
-                .filter(f.col("status") == f.lit("PENDING"))
-                .groupBy("package_id", "subpackage_id")
-                .agg(
-                    f.sum("items_quantity").alias("items_quantity"),
-                )
-            )
-            
-            # Perform the upsert operation (merge)
-            deltaTableProducts.alias("t").merge(
-                deduplicatedBatchDF.alias("s"),
-                "s.package_id = t.package_id AND s.subpackage_id = t.subpackage_id"
-            ).whenMatchedUpdate(
-                condition=f.col("t.stock_quantity") >= f.col("s.items_quantity"),
-                set={
-                    "stock_quantity": f.col("t.stock_quantity") - f.col("s.items_quantity"),
-                }
-            ).execute()
-
-            logging.info(f"Batch {batchId} upserted successfully into package table.")
-
-        except Exception as e:
-            logging.error(f"Failed to upsert to package table in batch {batchId}: {str(e)}")
-            raise Exception(f"Upsert operation failed for batch {batchId}: {str(e)}")
+        logging.info(f"Batch {batchId} upserted successfully into package table.")
 
     def update_packages_stream(self, df_orders_items_stream: DataFrame):
         """
@@ -553,101 +527,9 @@ class PackagesStreamProcessor:
         Returns:
         - StreamingQuery: The StreamingQuery object representing the started stream.
         """
-        try:
-            # Start the streaming process with upsert logic using foreachBatch
-            update_products_stream = (
-                df_orders_items_stream
-                .select(
-                    f.col("package_id"),
-                    f.col("subpackage_id"),
-                    f.col("items_quantity"),
-                    f.col("status")
-                )
-                .writeStream
-                .format("delta")
-                .outputMode("update")
-                .foreachBatch(self.upsert_to_package)  # Use the class method for upserting
-                .option("path", self.packages_path)
-                .option("checkpointLocation", self.checkpoint_location)
-                .trigger(once=True)  # Process the stream once for batch processing
-                .start()
-            )
-
-            logging.info("Streaming query for packages update started successfully.")
-            return update_products_stream
-
-        except Exception as e:
-            logging.error(f"Error starting the streaming query for packages update: {str(e)}")
-            raise Exception(f"Streaming query failed: {str(e)}")
-
-
-
-
-
-
-
-
-
-
-def upsert_to_package(microBatchDF, batchId):
-    """
-    Upserts the incoming micro-batch DataFrame into the Delta table for products.
-
-    Parameters:
-    - microBatchDF: The micro-batch DataFrame from the streaming source.
-    - batchId: The unique identifier for the micro-batch.
-    """
-    deltaTableProducts = DeltaTable.forPath(spark, f"s3a://{BUCKET_NAME}/{ORDERS}/{GOLD}/package_table") #PRODUCTS_PATH)
-
-    # WorkArround Preprocess the micro-batch DataFrame to removemicrobath duplicates integrity lo
-    deduplicatedBatchDF = (
-        microBatchDF
-        .filter(f.col("status") == f.lit("PENDING"))
-        .groupBy("package_id", "subpackage_id")
-        .agg(
-            f.sum("items_quantity").alias("items_quantity"),
-        )
-    )
-    (
-        deltaTableProducts.alias("t")
-        .merge(
-            deduplicatedBatchDF.alias("s"),
-            "s.package_id = t.package_id AND s.subpackage_id = t.subpackage_id"  
-        )
-        .whenMatchedUpdate(
-            # Quantity availability to fulfill order
-            condition=f.col("t.stock_quantity") >= f.col("s.items_quantity"),
-            set={
-                "stock_quantity": f.col("t.stock_quantity") - f.col("s.items_quantity"),
-                # "updated_at": f.current_timestamp()
-            },
-        )
-        .execute()
-    )
-
-def update_packages_stream(
-    df_orders_items_stream: DataFrame, 
-    packages_path: str, 
-    checkpoint_location: str, 
-    upsert_function
-):
-    """
-    Initializes and starts a streaming query to update the products table using the upsert function.
-
-    Parameters:
-    - df_orders_items_stream (DataFrame): The input streaming DataFrame containing orders items data.
-    - packages_path (str): The path to the Delta table where the packages data will be stored.
-    - checkpoint_location (str): The checkpoint location for the stream query.
-    - upsert_function (function): The function to perform upsert operations on the Delta table.
-
-    Returns:
-    - StreamingQuery: The StreamingQuery object representing the started stream.
-    """
-    try:
-        # Start the streaming write process with upsert logic using foreachBatch
+        # Start the streaming process with upsert logic using foreachBatch
         update_products_stream = (
             df_orders_items_stream
-            # .filter(f.col("status") == f.lit("PENDING"))
             .select(
                 f.col("package_id"),
                 f.col("subpackage_id"),
@@ -657,303 +539,12 @@ def update_packages_stream(
             .writeStream
             .format("delta")
             .outputMode("update")
-            .foreachBatch(upsert_to_package)  # Use the provided upsert function
-            .option("path", packages_path)
-            .option("checkpointLocation", checkpoint_location)
-            .trigger(once=True)  # Single-trigger mode for processing the micro-batch once
+            .foreachBatch(self.upsert_to_package)  # Use the class method for upserting
+            .option("path", self.packages_path)
+            .option("checkpointLocation", self.checkpoint_location)
+            .trigger(once=True)  # Process the stream once for batch processing
             .start()
         )
 
-        # Log successful stream start
-        logging.info("Streaming query for packages update started successfully.")
+        logging.info(f"Packages stream successfully written to {self.packages_path}")
         return update_products_stream
-
-    except Exception as e:
-        logging.error(f"Error starting the streaming query for packagess update: {str(e)}")
-        raise  # Re-raise exception for further handling
-
- 
-def process_orders_items_stream(df_order_stream: DataFrame) -> DataFrame:
-    """
-    Transforms the incoming order stream DataFrame by exploding order items,
-    generating inventory IDs, and adding a status column.
-
-    Parameters:
-    - df_order_stream (DataFrame): Input DataFrame representing the order stream.
-
-    Returns:
-    - DataFrame: Transformed streaming DataFrame with the required columns.
-
-    Raises:
-    - ValueError: If the input DataFrame is empty or has unexpected schema.
-    """    
-    try:
-        # Validate input streaming DataFrame
-        # if df_order_stream is None or len(df_order_stream.columns) == 0:
-        #     raise ValueError("Input DataFrame is empty or not provided")
-
-        # Apply the transformation logic for the streaming DataFrame
-        df_orders_items_stream = (
-            df_order_stream            
-            .withColumn("order_exploded", f.explode(f.col("order_details.items")))
-            .withColumn("package_exploded", f.explode(f.col("order_exploded.packages")))
-            .withColumn("inventory_id", f.concat(f.lit("inv-"), f.expr("uuid()")))
-            .withColumn("items_quantity", f.col("order_exploded.quantity") * f.col("package_exploded.quantity"))
-            .withColumn("items_weight", f.col("items_quantity") * f.col("package_exploded.weight"))
-            .withColumn("items_volume", f.col("items_quantity") * f.col("package_exploded.volume"))
-            .withColumn("status", f.lit("PENDING"))
-            .select(
-                f.col("inventory_id"),
-                f.col("order_id"),
-                f.col("order_exploded.product_id").alias("product_id"),
-                f.col("order_exploded.product_name").alias("product_name"),
-                f.col("order_exploded.price").alias("order_price"),
-                f.col("package_exploded.package_id").alias("package_id"),
-                f.col("package_exploded.subpackage_id").alias("subpackage_id"),
-                f.col("items_quantity"),
-                f.col("items_weight"),
-                f.col("items_volume"),
-                f.col("order_details.order_timestamp").alias("order_timestamp"),
-                f.col("status")
-            )
-        )
-        # Log success message
-        logging.info("Transformation applied successfully to the streaming DataFrame.")
-        return df_orders_items_stream
-
-    except Exception as e:
-        logging.error(f"Error occurred during transformation: {str(e)}")
-        raise  # Re-raise exception for further handling
- 
-def upsert_to_orders_items(microBatchDF, batchId):
-    deltaTableOrdersItems = DeltaTable.forPath(spark, ORDERS_ITEMS_PATH)
-    (
-        deltaTableOrdersItems.alias("t")
-        .merge(
-            microBatchDF.alias("s"),
-            "s.order_id = t.order_id AND s.inventory_id = t.inventory_id"
-        )
-        .whenMatchedUpdate(
-            set={
-                "status": f.lit("PROCESSING"),
-                "order_timestamp": f.current_timestamp()
-            },
-        )
-        .execute()
-    )
-
-def update_orders_items_stream(df_orders_items_stream, ORDERS_ITEMS_PATH, ORDERS_ITEMS_CHECKPOINT_LOCATION, upsert_to_orders_items):
-    """
-    Function to process the orders items stream, filtering by PENDING status and upserting into the Delta Lake table.
-    """
-    # Apply transformations and define the streaming write operation
-    processing_orders_items_stream = (
-        df_orders_items_stream
-        .filter(f.col("status") == f.lit("PENDING"))  # Filter by status
-        .select(
-            f.col("inventory_id"),
-            f.col("order_id")
-        )
-        .writeStream
-        .format("delta")  # Write to Delta format
-        .outputMode("update")  # Use 'update' mode for micro-batch processing
-        .foreachBatch(upsert_to_orders_items)  # Use the provided upsert function
-        .trigger(once=True)  # Trigger the stream to process once
-        .option("path", ORDERS_ITEMS_PATH)
-        .option("checkpointLocation", f"{ORDERS_ITEMS_CHECKPOINT_LOCATION}_processing")
-        .start()
-    )
-    
-    return processing_orders_items_stream
-
-
-def process_orders_stream(df_order_stream, orders_path, checkpoint_location):
-    """
-    Processes the order stream by selecting specific columns related to orders and writing them 
-    as a stream into a Delta table.
-
-    Parameters:
-    - df_order_stream: The input PySpark DataFrame containing order stream data.
-    - orders_path: The path where the Delta table for orders should be written.
-    - checkpoint_location: The location where checkpoint data will be stored for fault-tolerance.
-
-    Raises:
-    - Exception: If the streaming process fails or encounters an error.
-    """    
-    try:
-        # Define the stream transformation and writing process
-        orders_stream = (
-            df_order_stream
-            .select(
-                f.col("order_id"),
-                f.col("order_details.customer_id").alias("customer_id"),
-                f.col("order_details.total_weight").alias("total_weight"),
-                f.col("order_details.total_volume").alias("total_volume"),
-                f.col("order_details.total_amount").alias("total_price"),
-                f.col("order_details.order_timestamp").alias("order_timestamp"),
-                f.col("order_details.status").alias("status"),
-                f.col("order_details.destination_address.lat").alias("lat"),
-                f.col("order_details.destination_address.lon").alias("lon")
-            )
-            .writeStream
-            .format("delta")
-            .outputMode("append")
-            .trigger(once=True)  # Using trigger(once=True) as per requirement
-            .option("path", orders_path)
-            .option("checkpointLocation", checkpoint_location)
-            .start()
-        )
-        
-        # Log the status of the streaming process
-        logging.info(f"Streaming process status: {orders_stream.status}")
-        
-        print(f"Orders stream successfully written to {orders_path}")
-
-        # Return Stream
-        return orders_stream
-        
-    except Exception as e:
-        # Log the error and raise an exception
-        logging.error(f"Failed to process orders stream: {str(e)}")
-        raise Exception(f"Failed to process orders stream: {str(e)}")
-
-def upsert_to_orders(microBatchDF, batchId):
-    """
-    Function to upsert records into Delta Lake table for orders.
-    Removes duplicate order_id records, updates status to PROCESSING, and sets the current order timestamp for matched records.
-    """
-    # Load the existing Delta table
-    deltaTableOrders = DeltaTable.forPath(spark, ORDERS_PATH)
-    
-    # Remove duplicate records based on order_id
-    # microBatchDF = microBatchDF.dropDuplicates(["order_id"])
-    
-    # Perform the merge (upsert) operation
-    (
-        deltaTableOrders.alias("t")
-        .merge(
-            microBatchDF.alias("s"),
-            "s.order_id = t.order_id"
-        )
-        .whenMatchedUpdate(
-            set={
-                "status": f.lit("PROCESSING"),
-                "order_timestamp": f.current_timestamp()
-            }
-        )
-        .execute()
-    )
-
-def update_orders_stream(df_orders_items_stream, ORDERS_PATH, ORDERS_CHECKPOINT_LOCATION, upsert_to_orders):
-    """
-    Function to process the orders stream, filtering by RECEIVED status and upserting into the Delta Lake table.
-    """
-    # Apply transformations and define the streaming write operation
-    processing_orders_stream = (
-        df_orders_items_stream
-        .filter(f.col("status") == f.lit("RECEIVED"))  # Filter by status
-        .select(
-            f.col("order_id")  # Select order_id for upsert
-        )
-        .writeStream
-        .format("delta")  # Write to Delta format
-        .outputMode("update")  # Use 'update' mode for micro-batch processing
-        .foreachBatch(upsert_to_orders)
-        .trigger(once=True)  # Trigger the stream to process once
-        .option("path", ORDERS_PATH)
-        .option("checkpointLocation", f"{ORDERS_CHECKPOINT_LOCATION}_processing")
-        .start()
-    )
-    
-    return processing_orders_stream
-
-
-def process_events_stream(df_order_stream, events_path, checkpoint_location):
-    """
-    Processes the order stream by selecting event-specific columns and writing them 
-    as a stream into a Delta table.
-
-    Parameters:
-    - df_order_stream: The input PySpark DataFrame containing order stream data.
-    - events_path: The path where the Delta table for events should be written.
-    - checkpoint_location: The location where checkpoint data will be stored for fault-tolerance.
-
-    Raises:
-    - Exception: If the streaming process fails or encounters an error.
-    """
-    try:
-        # Define the stream transformation and writing process
-        events_stream = (
-            df_order_stream
-            .select(
-                f.col("event_id"),
-                f.col("event_type"),
-                f.col("event_timestamp"),
-                f.col("order_id")
-            )
-            .writeStream
-            .format("delta")
-            .outputMode("append")
-            .trigger(once=True)  # Using trigger(once=True) as per requirement
-            .option("path", events_path)
-            .option("checkpointLocation", checkpoint_location)
-            .start()
-        )
-        
-        # Log the status of the streaming process
-        logging.info(f"Streaming process status: {events_stream.status}")
-        
-        print(f"Events stream successfully written to {events_path}")
-
-        # return stream
-        return events_stream
-        
-    except Exception as e:
-        # Log the error and raise an exception
-        logging.error(f"Failed to process events stream: {str(e)}")
-        raise Exception(f"Failed to process events stream: {str(e)}")
-
-def append_events_stream(spark, ORDERS_PATH, EVENTS_PATH, EVENTS_CHECKPOINT_LOCATION):
-    """
-    Function to process the events stream by reading from the Delta table,
-    filtering for records with status 'PROCESSING', generating event metadata, 
-    and writing the stream to another Delta table.
-    
-    Parameters:
-    - spark: SparkSession object
-    - ORDERS_PATH: Path to the Delta table storing order data
-    - EVENTS_PATH: Path to save the processed events stream
-    - EVENTS_CHECKPOINT_LOCATION: Path for checkpointing the streaming query
-    """
-    # Define the streaming read and transformations
-    processing_events_stream = (
-        spark
-        .readStream
-        .format("delta")  # Reading from Delta format
-        .load(ORDERS_PATH)  # Load from the specified Delta table path
-        .filter(f.col("status") == f.lit("PROCESSING"))  # Filter for processing orders
-        .withColumn(
-            "event_id", f.concat(f.lit("ev-"), f.expr("uuid()"))  # Generate unique event ID
-        )
-        .withColumn(
-            "event_type", f.lit("INVENTORY_UPDATED")  # Set the event type
-        )
-        .withColumn(
-            "event_timestamp", f.current_timestamp()  # Add the current timestamp
-        )
-        .select(
-            f.col("event_id"),
-            f.col("event_type"),
-            f.col("event_timestamp"),
-            f.col("order_id")  # Select relevant columns
-        )
-        .writeStream
-        .format("delta")  # Write the output in Delta format
-        .outputMode("append")  # Append new data as it arrives
-        .trigger(once=True)  # Trigger the stream to process once
-        .option("path", EVENTS_PATH)  # Specify the path to write the output
-        .option("checkpointLocation", f"{EVENTS_CHECKPOINT_LOCATION}_processing")  # Set checkpoint location
-        .start()  # Start the streaming query
-    )
-    
-    return processing_events_stream
