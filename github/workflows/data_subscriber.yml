@@ -1,0 +1,44 @@
+name: Data Subscriber
+
+on:
+    # Trigger on push to the main branch
+    push:
+      branches:
+        - main
+    # Allow manual trigger of the workflow
+    workflow_dispatch:
+    # Schedule the workflow to run daily at 10 AM UTC
+    # schedule:
+      # - cron: "0 10 * * *"
+
+jobs:
+  run-pyspark-job:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v2
+
+      - name: Set up Python
+        uses: actions/setup-python@v3
+        with:
+          python-version: 3.10.11
+
+      - name: Set up Java
+        uses: actions/setup-java@v3
+        with:
+          java-version: 11
+          distribution: 'temurin'
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+
+      - name: Run PySpark Job
+        env:
+          ENVIRONMENT: "GITHUB_ACTIONS"  # Set the environment flag for GitHub Actions
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          # AWS_DEFAULT_REGION: ${{ secrets.AWS_DEFAULT_REGION }}
+        run: |
+          python src/main.py  # Run your script with Python
