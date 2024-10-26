@@ -8,8 +8,8 @@ on:
     # Allow manual trigger of the workflow
     workflow_dispatch:
     # Schedule the workflow to run daily at 10 AM UTC
-    schedule:
-      - cron: "0,35 * * * *"
+    # schedule:
+    #   - cron: "0,35 * * * *"
 
 jobs:
   run-pyspark-job:
